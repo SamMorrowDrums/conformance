@@ -49,9 +49,9 @@ import {
   Leg,
   listRequirementRevisions,
   loadRequirements,
-  notScoredScenarios,
   REASONS,
   RequirementSet,
+  requirementsExitCode,
   scoredScenarios
 } from './requirements';
 import {
@@ -106,42 +106,6 @@ function resolveRequirements(
     console.error(error instanceof Error ? error.message : String(error));
     process.exit(1);
   }
-}
-
-/**
- * Exit status under a requirement set. Scenarios the set runs without scoring
- * (extensions, post-release additions) are reported but must not fail the run:
- * otherwise the documented command red-flags an implementation that meets every
- * requirement the revision actually imposes.
- */
-function requirementsExitCode(
-  requirements: RequirementSet,
-  leg: Leg,
-  results: { scenario: string; checks: ConformanceCheck[] }[]
-): number {
-  const scored = new Set(scoredScenarios(requirements, leg));
-  const unscored = results.filter((r) => !scored.has(r.scenario));
-  if (unscored.length > 0) {
-    const failing = unscored.filter((r) =>
-      r.checks.some((c) => c.status === 'FAILURE')
-    );
-    console.log(
-      `\nNot scored for ${requirements.revision}: ${unscored.length} scenario(s) run, ${failing.length} failing. These do not affect conformance.`
-    );
-    for (const r of unscored) {
-      const why = notScoredScenarios(requirements, leg).find(
-        (e) => e.scenario === r.scenario
-      );
-      const failed = r.checks.some((c) => c.status === 'FAILURE');
-      console.log(
-        `  ${failed ? '\u2717' : '\u2713'} ${r.scenario} (${why?.reason ?? 'not scored'})`
-      );
-    }
-  }
-  const scoredFailed = results
-    .filter((r) => scored.has(r.scenario))
-    .some((r) => r.checks.some((c) => c.status === 'FAILURE'));
-  return scoredFailed ? 1 : 0;
 }
 
 /** Print one revision's requirement set. `list` is display-only, so it can show several. */
@@ -597,7 +561,7 @@ program
           process.exit(0);
         }
 
-        const { failed } = printServerResults(
+        const { failed, warnings } = printServerResults(
           result.checks,
           result.scenarioDescription,
           verbose
@@ -616,7 +580,7 @@ program
           process.exit(baselineResult.exitCode);
         }
 
-        process.exit(failed > 0 ? 1 : 0);
+        process.exit(failed > 0 || warnings > 0 ? 1 : 0);
       } else {
         // Run scenarios based on suite
         const suite = options.suite?.toLowerCase() || 'active';
@@ -698,7 +662,7 @@ program
           }
         }
 
-        const { totalFailed } = printServerSummary(allResults);
+        const { totalFailed, totalWarnings } = printServerSummary(allResults);
 
         if (options.expectedFailures) {
           const expectedFailuresConfig = await loadExpectedFailures(
@@ -723,7 +687,7 @@ program
         process.exit(
           requirements
             ? requirementsExitCode(requirements, 'server', allResults)
-            : totalFailed > 0
+            : totalFailed > 0 || totalWarnings > 0
               ? 1
               : 0
         );
