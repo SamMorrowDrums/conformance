@@ -10,6 +10,7 @@ import {
   SCOPE_CHALLENGE_FULL_TOKEN,
   SCOPE_CHALLENGE_LOW_TOKEN,
   ServerScopeChallengeScenario,
+  parseBearerChallenge,
   scopeChallengeResourceMetadataUrl
 } from './scope-challenge';
 
@@ -75,10 +76,10 @@ function findFixture(request: JsonRpcRequest) {
   });
 }
 
-async function listen(server: Server): Promise<string> {
+async function listen(server: Server, endpoint = '/mcp'): Promise<string> {
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   const port = (server.address() as AddressInfo).port;
-  return `http://127.0.0.1:${port}/mcp`;
+  return `http://127.0.0.1:${port}${endpoint}`;
 }
 
 async function close(server: Server | undefined): Promise<void> {
@@ -150,6 +151,58 @@ function stopProcess(proc: ChildProcess | undefined): Promise<void> {
   });
 }
 
+describe('scope challenge header parsing', () => {
+  it('parses quoted URLs and bare token values', () => {
+    const parsed = parseBearerChallenge(
+      'Bearer error=insufficient_scope, mode=token-._~+, resource_metadata="https://example.com/.well-known/oauth-protected-resource/mcp?tenant=a,b"'
+    );
+
+    expect(parsed?.params).toMatchObject({
+      error: 'insufficient_scope',
+      mode: 'token-._~+',
+      resource_metadata:
+        'https://example.com/.well-known/oauth-protected-resource/mcp?tenant=a,b'
+    });
+  });
+
+  it('rejects URL separators in unquoted auth-param values', () => {
+    const parsed = parseBearerChallenge(
+      'Bearer error=insufficient_scope, scope=files:read, resource_metadata=https://example.com/.well-known/oauth-protected-resource'
+    );
+
+    expect(parsed?.params.error).toBe('insufficient_scope');
+    expect(parsed?.params.scope).toBeUndefined();
+    expect(parsed?.params.resource_metadata).toBeUndefined();
+  });
+});
+
+describe('scope challenge metadata URL derivation', () => {
+  it.each([
+    [
+      'endpoint path',
+      'https://example.com/tenant/mcp',
+      'https://example.com/.well-known/oauth-protected-resource/tenant/mcp'
+    ],
+    [
+      'trailing path slash',
+      'https://example.com/tenant/mcp/',
+      'https://example.com/.well-known/oauth-protected-resource/tenant/mcp/'
+    ],
+    [
+      'query component',
+      'https://example.com/tenant/mcp?tenant=blue%2Fgreen',
+      'https://example.com/.well-known/oauth-protected-resource/tenant/mcp?tenant=blue%2Fgreen'
+    ],
+    [
+      'root resource',
+      'https://example.com/',
+      'https://example.com/.well-known/oauth-protected-resource'
+    ]
+  ])('preserves %s semantics', (_case, resource, expected) => {
+    expect(scopeChallengeResourceMetadataUrl(resource)).toBe(expected);
+  });
+});
+
 describe('ServerScopeChallengeScenario', () => {
   let server: Server | undefined;
   let process: ChildProcess | undefined;
@@ -160,71 +213,93 @@ describe('ServerScopeChallengeScenario', () => {
     process = undefined;
   });
 
-  it('passes every primitive with a complete, parseable challenge and upgraded retry', async () => {
-    let serverUrl = '';
-    server = createServer((req, res) => {
-      let rawBody = '';
-      req.setEncoding('utf8');
-      req.on('data', (chunk) => {
-        rawBody += chunk;
-      });
-      req.on('end', () => {
-        const request = JSON.parse(rawBody) as JsonRpcRequest;
-        const fixture = findFixture(request);
-        if (!fixture) {
-          res.statusCode = 404;
-          res.end();
-          return;
-        }
+  const validMetadataCases: readonly [
+    label: string,
+    endpoint: string,
+    metadataLocation: 'derived' | 'root'
+  ][] = [
+    ['path-derived endpoint', '/tenant/mcp', 'derived'],
+    ['path-derived trailing slash', '/tenant/mcp/', 'derived'],
+    ['path-derived query', '/tenant/mcp?tenant=blue%2Fgreen', 'derived'],
+    ['root well-known alternative', '/tenant/mcp', 'root']
+  ];
 
-        const authorization = req.headers.authorization;
-        if (authorization === `Bearer ${SCOPE_CHALLENGE_LOW_TOKEN}`) {
-          const metadata = scopeChallengeResourceMetadataUrl(serverUrl);
-          res.statusCode = 403;
+  it.each(validMetadataCases)(
+    'passes every primitive with a %s metadata URL',
+    async (_label, endpoint, metadataLocation) => {
+      let serverUrl = '';
+      server = createServer((req, res) => {
+        let rawBody = '';
+        req.setEncoding('utf8');
+        req.on('data', (chunk) => {
+          rawBody += chunk;
+        });
+        req.on('end', () => {
+          const request = JSON.parse(rawBody) as JsonRpcRequest;
+          const fixture = findFixture(request);
+          if (!fixture) {
+            res.statusCode = 404;
+            res.end();
+            return;
+          }
+
+          const authorization = req.headers.authorization;
+          if (authorization === `Bearer ${SCOPE_CHALLENGE_LOW_TOKEN}`) {
+            const metadata =
+              metadataLocation === 'root'
+                ? new URL(
+                    '/.well-known/oauth-protected-resource',
+                    serverUrl
+                  ).toString()
+                : scopeChallengeResourceMetadataUrl(serverUrl);
+            res.statusCode = 403;
+            res.setHeader('Content-Type', 'application/json');
+            res.setHeader(
+              'WWW-Authenticate',
+              `Bearer resource_metadata="${metadata}", error_description="Needs \\"both\\", scopes", scope="${fixture.requiredScopes.join(' ')} mcp:conformance:extra", error="insufficient_scope"`
+            );
+            res.end(
+              JSON.stringify({
+                jsonrpc: '2.0',
+                id: request.id,
+                error: { code: -32600, message: 'Insufficient scope' }
+              })
+            );
+            return;
+          }
+
+          if (authorization !== `Bearer ${SCOPE_CHALLENGE_FULL_TOKEN}`) {
+            res.statusCode = 401;
+            res.end();
+            return;
+          }
+
+          res.statusCode = 200;
           res.setHeader('Content-Type', 'application/json');
-          res.setHeader(
-            'WWW-Authenticate',
-            `Bearer resource_metadata="${metadata}", error_description="Needs \\"both\\", scopes", scope="${fixture.requiredScopes.join(' ')} mcp:conformance:extra", error="insufficient_scope"`
-          );
           res.end(
             JSON.stringify({
               jsonrpc: '2.0',
               id: request.id,
-              error: { code: -32600, message: 'Insufficient scope' }
+              result: fixtureResult(request)
             })
           );
-          return;
-        }
-
-        if (authorization !== `Bearer ${SCOPE_CHALLENGE_FULL_TOKEN}`) {
-          res.statusCode = 401;
-          res.end();
-          return;
-        }
-
-        res.statusCode = 200;
-        res.setHeader('Content-Type', 'application/json');
-        res.end(
-          JSON.stringify({
-            jsonrpc: '2.0',
-            id: request.id,
-            result: fixtureResult(request)
-          })
-        );
+        });
       });
-    });
-    serverUrl = await listen(server);
+      serverUrl = await listen(server, endpoint);
 
-    const checks = await new ServerScopeChallengeScenario().run(
-      testContext(serverUrl, DRAFT_PROTOCOL_VERSION)
-    );
+      const checks = await new ServerScopeChallengeScenario().run(
+        testContext(serverUrl, DRAFT_PROTOCOL_VERSION)
+      );
 
-    expect(checks).toHaveLength(16);
-    expect(checks.every((check) => check.status === 'SUCCESS')).toBe(true);
-    expect(
-      checks.filter((check) => check.id === 'sep-2350-server-single-challenge')
-    ).toHaveLength(4);
-  });
+      expect(checks).toHaveLength(16);
+      expect(checks.every((check) => check.status === 'SUCCESS')).toBe(true);
+      expect(
+        checks.filter(
+          (check) => check.id === 'sep-2350-server-single-challenge'
+        )
+      ).toHaveLength(4);
+    }
+  );
 
   it('emits pinned warnings against a server that does not challenge any primitive', async () => {
     const port = await getFreePort();

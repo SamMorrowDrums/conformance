@@ -221,17 +221,23 @@ scenarios continue to exercise unauthenticated fixtures.
 
 For the low token, each operation returns HTTP 403 with a Bearer
 `WWW-Authenticate` challenge containing `error="insufficient_scope"`,
-`scope` containing both listed scopes, and `resource_metadata` equal to:
+`scope` containing both listed scopes, and a quoted, absolute
+`resource_metadata` URL. The URL may be an explicitly advertised metadata
+location, the root well-known location, or the RFC 9728 path-derived location:
 
 ```text
 {server origin}/.well-known/oauth-protected-resource{server path}
 ```
 
-For example, a server URL of `http://localhost:3000/mcp` uses
-`http://localhost:3000/.well-known/oauth-protected-resource/mcp`. Parameter and
-scope ordering are not significant, and the server may include additional
-scopes. Retrying the same operation with the full token must return its normal
-successful MCP result.
+For example, a server URL of `http://localhost:3000/mcp` may use
+`http://localhost:3000/.well-known/oauth-protected-resource/mcp` or
+`http://localhost:3000/.well-known/oauth-protected-resource`. Path-derived
+locations preserve a meaningful trailing path slash and query component.
+Parameter and scope ordering are not significant, and the server may include
+additional scopes. Retrying the same operation with the full token must return
+its normal successful MCP result. Protected-resource metadata discovery and
+document-content checks remain covered by the authorization discovery
+scenarios.
 
 These static tokens are test inputs only. Production servers should use their
 normal access-token verification, and this fixture does not replace the

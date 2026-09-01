@@ -166,4 +166,27 @@ describe('server warning summaries', () => {
       totalWarnings: 1
     });
   });
+
+  test('keeps informational diagnostics green and out of warning totals', () => {
+    const summary = printServerSummary([
+      {
+        scenario: 'sessionless-scenario',
+        checks: [
+          {
+            id: 'optional-session',
+            name: 'OptionalSession',
+            description: 'The server did not opt into session management',
+            status: 'INFO',
+            timestamp: new Date().toISOString()
+          }
+        ]
+      }
+    ]);
+
+    expect(summary).toEqual({
+      totalPassed: 0,
+      totalFailed: 0,
+      totalWarnings: 0
+    });
+  });
 });

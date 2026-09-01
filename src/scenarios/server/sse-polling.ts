@@ -115,8 +115,9 @@ export class ServerSSEPollingScenario implements ClientScenario {
         checks.push({
           id: 'server-sse-polling-session',
           name: 'ServerSSEPollingSession',
-          description: 'Server provides session ID for SSE polling tests',
-          status: 'WARNING',
+          description:
+            'Server does not use optional session management for SSE polling tests',
+          status: 'INFO',
           timestamp: new Date().toISOString(),
           specReferences: [
             {
@@ -126,7 +127,7 @@ export class ServerSSEPollingScenario implements ClientScenario {
           ],
           details: {
             message:
-              'Server did not provide session ID - SSE polling tests may not work correctly'
+              'Server did not provide an optional session ID; polling checks continue without MCP-Session-Id'
           }
         });
       }

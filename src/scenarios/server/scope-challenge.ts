@@ -108,7 +108,7 @@ const SPEC_REFERENCE = {
   url: 'https://modelcontextprotocol.io/specification/2026-07-28/basic/authorization#runtime-insufficient-scope-errors'
 };
 
-interface ParsedChallenge {
+export interface ParsedChallenge {
   scheme: string;
   params: Record<string, string>;
 }
@@ -151,14 +151,14 @@ function splitOutsideQuotes(value: string): string[] {
 
 function parseAuthParam(part: string): [string, string] | undefined {
   const match = part.match(
-    /^([!#$%&'*+\-.^_`|~0-9A-Za-z]+)\s*=\s*(?:"((?:\\.|[^"])*)"|([!#$%&'*+\-.^_`|~0-9A-Za-z:/]+))$/
+    /^([!#$%&'*+\-.^_`|~0-9A-Za-z]+)\s*=\s*(?:"((?:\\.|[^"])*)"|([!#$%&'*+\-.^_`|~0-9A-Za-z]+))$/
   );
   if (!match) return undefined;
   const value = match[2]?.replace(/\\(.)/g, '$1') ?? match[3];
   return [match[1].toLowerCase(), value];
 }
 
-function parseBearerChallenge(
+export function parseBearerChallenge(
   value: string | null
 ): ParsedChallenge | undefined {
   if (!value) return undefined;
@@ -189,13 +189,48 @@ function parseBearerChallenge(
 }
 
 export function scopeChallengeResourceMetadataUrl(serverUrl: string): string {
-  const url = new URL(serverUrl);
-  const resourcePath =
-    url.pathname === '/' ? '' : url.pathname.replace(/\/+$/, '');
-  url.pathname = `/.well-known/oauth-protected-resource${resourcePath}`;
-  url.search = '';
-  url.hash = '';
-  return url.toString();
+  const resource = new URL(serverUrl);
+  const metadata = new URL(resource.origin);
+  metadata.pathname = `/.well-known/oauth-protected-resource${
+    resource.pathname === '/' ? '' : resource.pathname
+  }`;
+  metadata.search = resource.search;
+  return metadata.toString();
+}
+
+function resourceMetadataUrlError(
+  resourceMetadata: string | undefined,
+  serverUrl: string
+): string | undefined {
+  if (!resourceMetadata) {
+    return 'The challenge did not include resource_metadata';
+  }
+
+  let metadata: URL;
+  try {
+    metadata = new URL(resourceMetadata);
+  } catch {
+    return `resource_metadata is not an absolute URL: ${resourceMetadata}`;
+  }
+
+  if (metadata.username || metadata.password) {
+    return 'resource_metadata must not contain user information';
+  }
+  if (metadata.hash) {
+    return 'resource_metadata must not contain a fragment';
+  }
+
+  const resource = new URL(serverUrl);
+  const isHttps = metadata.protocol === 'https:';
+  const isSameOriginHttpFixture =
+    metadata.protocol === 'http:' &&
+    resource.protocol === 'http:' &&
+    metadata.origin === resource.origin;
+  if (!isHttps && !isSameOriginHttpFixture) {
+    return 'resource_metadata must use HTTPS (same-origin HTTP is accepted for local conformance fixtures)';
+  }
+
+  return undefined;
 }
 
 async function sendChallengeRequest(
@@ -276,10 +311,14 @@ function challengeChecks(
   fixture: ScopeChallengeFixture,
   response: ChallengeResponse | undefined,
   requestError: unknown,
-  expectedResourceMetadata: string
+  serverUrl: string
 ): ConformanceCheck[] {
   const parsed = parseBearerChallenge(response?.wwwAuthenticate ?? null);
   const scopes = parsed?.params.scope?.split(/\s+/).filter(Boolean) ?? [];
+  const metadataError = resourceMetadataUrlError(
+    parsed?.params.resource_metadata,
+    serverUrl
+  );
   const hasAllScopes = fixture.requiredScopes.every((scope) =>
     scopes.includes(scope)
   );
@@ -310,12 +349,16 @@ function challengeChecks(
       'ScopeChallengeWwwAuthenticate',
       `${fixture.label} returns a Bearer insufficient_scope challenge with protected-resource metadata`,
       parsed?.params.error === 'insufficient_scope' &&
-        parsed.params.resource_metadata === expectedResourceMetadata,
+        metadataError === undefined,
       'WARNING',
       parsed
-        ? `Expected error="insufficient_scope" and resource_metadata="${expectedResourceMetadata}", got ${response?.wwwAuthenticate ?? '(missing header)'}`
+        ? `Expected error="insufficient_scope" and a valid resource_metadata URL, got ${response?.wwwAuthenticate ?? '(missing header)'}${metadataError ? ` (${metadataError})` : ''}`
         : `Expected a Bearer WWW-Authenticate challenge, got ${response?.wwwAuthenticate ?? '(missing header)'}`,
-      details
+      {
+        ...details,
+        resourceMetadata: parsed?.params.resource_metadata,
+        metadataError
+      }
     ),
     check(
       fixture,
@@ -387,9 +430,6 @@ scope pairs and metadata URL rule.`;
 
   async run(ctx: RunContext): Promise<ConformanceCheck[]> {
     const checks: ConformanceCheck[] = [];
-    const expectedResourceMetadata = scopeChallengeResourceMetadataUrl(
-      ctx.serverUrl
-    );
 
     for (const fixture of SCOPE_CHALLENGE_FIXTURES) {
       let challengeResponse: ChallengeResponse | undefined;
@@ -404,7 +444,7 @@ scope pairs and metadata URL rule.`;
           fixture,
           challengeResponse,
           challengeError,
-          expectedResourceMetadata
+          ctx.serverUrl
         )
       );
 

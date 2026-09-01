@@ -170,6 +170,17 @@ describe('filterScenariosByRequirements', () => {
         ])
       ).toBe(0);
     });
+
+    it('does not fail when a scored scenario emits diagnostic information', () => {
+      expect(
+        requirementsExitCode(requirements, 'server', [
+          {
+            scenario: 'scored-scenario',
+            checks: [{ ...warningCheck, status: 'INFO' }]
+          }
+        ])
+      ).toBe(0);
+    });
   });
 
   it('runs the not-scored entries but keeps them out of the scored set', () => {
