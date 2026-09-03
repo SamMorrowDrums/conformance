@@ -301,7 +301,73 @@ describe('ServerScopeChallengeScenario', () => {
     }
   );
 
-  it('emits pinned warnings against a server that does not challenge any primitive', async () => {
+  it.each([
+    ['missing', undefined],
+    ['malformed', 'Bearer/ error="insufficient_scope"']
+  ])(
+    'skips completeness when the WWW-Authenticate header is %s',
+    async (_case, wwwAuthenticate) => {
+      server = createServer((req, res) => {
+        let rawBody = '';
+        req.setEncoding('utf8');
+        req.on('data', (chunk) => {
+          rawBody += chunk;
+        });
+        req.on('end', () => {
+          const request = JSON.parse(rawBody) as JsonRpcRequest;
+          const fixture = findFixture(request);
+          if (!fixture) {
+            res.statusCode = 404;
+            res.end();
+            return;
+          }
+
+          if (
+            req.headers.authorization === `Bearer ${SCOPE_CHALLENGE_LOW_TOKEN}`
+          ) {
+            res.statusCode = 403;
+            if (wwwAuthenticate) {
+              res.setHeader('WWW-Authenticate', wwwAuthenticate);
+            }
+            res.end();
+            return;
+          }
+
+          res.statusCode = 200;
+          res.setHeader('Content-Type', 'application/json');
+          res.end(
+            JSON.stringify({
+              jsonrpc: '2.0',
+              id: request.id,
+              result: fixtureResult(request)
+            })
+          );
+        });
+      });
+
+      const checks = await new ServerScopeChallengeScenario().run(
+        testContext(await listen(server), DRAFT_PROTOCOL_VERSION)
+      );
+
+      const challengeChecks = checks.filter(
+        (check) => check.id === 'server-scope-challenge-www-authenticate'
+      );
+      expect(challengeChecks).toHaveLength(4);
+      expect(challengeChecks.every((check) => check.status === 'WARNING')).toBe(
+        true
+      );
+
+      const completenessChecks = checks.filter(
+        (check) => check.id === 'sep-2350-server-single-challenge'
+      );
+      expect(completenessChecks).toHaveLength(4);
+      expect(
+        completenessChecks.every((check) => check.status === 'SKIPPED')
+      ).toBe(true);
+    }
+  );
+
+  it('emits prerequisite warnings and skips completeness against a server that does not challenge', async () => {
     const port = await getFreePort();
     process = await startBrokenFixture(port);
 
@@ -311,13 +377,20 @@ describe('ServerScopeChallengeScenario', () => {
 
     for (const id of [
       'server-scope-challenge-http-403',
-      'server-scope-challenge-www-authenticate',
-      'sep-2350-server-single-challenge'
+      'server-scope-challenge-www-authenticate'
     ]) {
       const matching = checks.filter((check) => check.id === id);
       expect(matching).toHaveLength(4);
       expect(matching.every((check) => check.status === 'WARNING')).toBe(true);
     }
+
+    const completeness = checks.filter(
+      (check) => check.id === 'sep-2350-server-single-challenge'
+    );
+    expect(completeness).toHaveLength(4);
+    expect(completeness.every((check) => check.status === 'SKIPPED')).toBe(
+      true
+    );
 
     const retries = checks.filter(
       (check) => check.id === 'server-scope-challenge-upgraded-retry'

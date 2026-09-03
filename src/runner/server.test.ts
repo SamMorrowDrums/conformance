@@ -6,7 +6,11 @@
 import http from 'http';
 import type { AddressInfo } from 'net';
 import { afterEach, beforeEach, describe, test, expect } from 'vitest';
-import { printServerSummary, runServerConformanceTest } from './server';
+import {
+  printServerSummary,
+  runServerConformanceTest,
+  serverExitCode
+} from './server';
 import { DRAFT_PROTOCOL_VERSION, LATEST_SPEC_VERSION } from '../types';
 
 // The skip decision happens before any network request, so an unreachable
@@ -165,6 +169,7 @@ describe('server warning summaries', () => {
       totalFailed: 0,
       totalWarnings: 1
     });
+    expect(serverExitCode(summary.totalFailed, summary.totalWarnings)).toBe(1);
   });
 
   test('keeps informational diagnostics green and out of warning totals', () => {
@@ -188,5 +193,6 @@ describe('server warning summaries', () => {
       totalFailed: 0,
       totalWarnings: 0
     });
+    expect(serverExitCode(summary.totalFailed, summary.totalWarnings)).toBe(0);
   });
 });

@@ -190,3 +190,7 @@ export function printServerSummary(
 
   return { totalPassed, totalFailed, totalWarnings };
 }
+
+export function serverExitCode(failed: number, warnings: number): number {
+  return failed > 0 || warnings > 0 ? 1 : 0;
+}

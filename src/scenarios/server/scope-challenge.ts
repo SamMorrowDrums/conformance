@@ -329,6 +329,33 @@ function challengeChecks(
   };
   const requestErrorMessage =
     requestError instanceof Error ? requestError.message : String(requestError);
+  const completenessCheck: ConformanceCheck = parsed
+    ? check(
+        fixture,
+        'sep-2350-server-single-challenge',
+        'ScopeChallengeCompleteScopeSet',
+        `${fixture.label} includes all scopes required for the operation in one challenge`,
+        hasAllScopes,
+        'WARNING',
+        `Expected one challenge containing ${fixture.requiredScopes.join(' and ')}, got ${scopes.join(' ') || '(no scopes)'}`,
+        { ...details, challengedScopes: scopes }
+      )
+    : {
+        id: 'sep-2350-server-single-challenge',
+        name: `${fixture.label.replace(/ /g, '')}ScopeChallengeCompleteScopeSet`,
+        description: `${fixture.label} includes all scopes required for the operation in one challenge`,
+        status: 'SKIPPED',
+        timestamp: new Date().toISOString(),
+        specReferences: [SPEC_REFERENCE],
+        details: {
+          fixture: fixture.key,
+          method: fixture.method,
+          params: fixture.params,
+          requiredScopes: fixture.requiredScopes,
+          ...details,
+          note: 'No parseable Bearer challenge; the prerequisite challenge check reports the missing or malformed header'
+        }
+      };
 
   return [
     check(
@@ -360,16 +387,7 @@ function challengeChecks(
         metadataError
       }
     ),
-    check(
-      fixture,
-      'sep-2350-server-single-challenge',
-      'ScopeChallengeCompleteScopeSet',
-      `${fixture.label} includes all scopes required for the operation in one challenge`,
-      hasAllScopes,
-      'WARNING',
-      `Expected one challenge containing ${fixture.requiredScopes.join(' and ')}, got ${scopes.join(' ') || '(no scopes)'}`,
-      { ...details, challengedScopes: scopes }
-    )
+    completenessCheck
   ];
 }
 

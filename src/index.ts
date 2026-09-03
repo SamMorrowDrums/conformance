@@ -9,6 +9,7 @@ import {
   runServerConformanceTest,
   printServerResults,
   printServerSummary,
+  serverExitCode,
   runInteractiveMode
 } from './runner';
 import {
@@ -580,7 +581,7 @@ program
           process.exit(baselineResult.exitCode);
         }
 
-        process.exit(failed > 0 || warnings > 0 ? 1 : 0);
+        process.exit(serverExitCode(failed, warnings));
       } else {
         // Run scenarios based on suite
         const suite = options.suite?.toLowerCase() || 'active';
@@ -687,9 +688,7 @@ program
         process.exit(
           requirements
             ? requirementsExitCode(requirements, 'server', allResults)
-            : totalFailed > 0 || totalWarnings > 0
-              ? 1
-              : 0
+            : serverExitCode(totalFailed, totalWarnings)
         );
       }
     } catch (error) {
